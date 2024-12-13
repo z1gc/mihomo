@@ -30,6 +30,63 @@
 - Netfilter TCP redirecting. Deploy Mihomo on your Internet gateway with `iptables`.
 - Comprehensive HTTP RESTful API controller
 
+## Hacks
+
+* Yaml config can now support prepend/append, e.g.
+
+```yaml
+rules:
+  - DOMAIN-SUFFIX,google.com,PROXY
+  - DOMAIN-SUFFIX,github.com,PROXY
+
+dns:
+  fake-ip-filter:
+    - +.gov.cn
+    - +.edu.cn
+
+# Prepend:
++rules:
+  - DOMAIN-SUFFIX,gnu.org,PROXY
+
+dns.+fake-ip-filter:
+  - +.ac.cn
+
+# Append:
+rules+:
+  - DOMAIN-SUFFIX,kernel.org,PROXY
+
+dns.fake-ip-filter+:
+  - +.gd.cn
+```
+
+* Support `dns.fake-ip-reverse` configuration, it has higher priority and match the opposite of `dns.fake-ip-filter`, e.g.
+
+```yaml
+dns:
+  # Blacklist: these matched domains will not return faked ip:
+  fake-ip-filter-mode: blacklist
+  fake-ip-filter:
+    - +.cn
+  # BUT, following "reverse" will force these domains return faked ip:
+  fake-ip-reverse:
+    - +.googleapis.cn
+  # Result:
+  #  nslookup google.cn => real_ip
+  #  nslookup services.googleapis.cn => fake_ip
+
+dns:
+  # Whitelist: only these matched domains will return faked ip:
+  fake-ip-filter-mode: whitelist
+  fake-ip-filter:
+    - geosite:gfw
+  # BUT, following "reverse" will not let these domains return faked ip:
+  fake-ip-reverse:
+    - +.github.com
+  # Result:
+  #  nslookup google.com => fake_ip
+  #  nslookup github.com => real_ip
+```
+
 ## Dashboard
 
 A web dashboard with first-class support for this project has been created; it can be checked out at [metacubexd](https://github.com/MetaCubeX/metacubexd).

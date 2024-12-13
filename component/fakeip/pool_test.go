@@ -162,7 +162,7 @@ func TestPool_Skip(t *testing.T) {
 	for _, pool := range pools {
 		assert.True(t, pool.ShouldSkipped("example.com"))
 		assert.False(t, pool.ShouldSkipped("foo.com"))
-		assert.False(t, pool.shouldSkipped("baz.com"))
+		assert.False(t, pool.ShouldSkipped("baz.com"))
 	}
 }
 
@@ -185,6 +185,48 @@ func TestPool_SkipWhiteList(t *testing.T) {
 		assert.True(t, pool.ShouldSkipped("foo.com"))
 		assert.True(t, pool.ShouldSkipped("baz.com"))
 	}
+}
+
+func testSkipReverse(t *testing.T, mode C.FilterMode) {
+	ipnet := netip.MustParsePrefix("192.168.0.1/29")
+	tree := trie.New[struct{}]()
+	assert.NoError(t, tree.Insert("+.net", struct{}{}))
+	assert.False(t, tree.IsEmpty())
+	pools, tempfile, err := createPools(Options{
+		IPNet: ipnet,
+		Size:  10,
+		Host:  []C.DomainMatcher{tree.NewDomainSet()},
+		Mode:  mode,
+	})
+	assert.Nil(t, err)
+	defer os.Remove(tempfile)
+
+	reverse := trie.New[struct{}]()
+	assert.NoError(t, reverse.Insert("test.net", struct{}{}))
+	assert.False(t, reverse.IsEmpty())
+	var matcher C.DomainMatcher = reverse.NewDomainSet()
+
+	if mode == C.FilterBlackList {
+		for _, pool := range pools {
+			pool.Reverse = append(pool.Reverse, matcher)
+			assert.False(t, pool.ShouldSkipped("test.net"))
+			assert.True(t, pool.ShouldSkipped("only.net"))
+		}
+	} else {
+		for _, pool := range pools {
+			pool.Reverse = append(pool.Reverse, matcher)
+			assert.True(t, pool.ShouldSkipped("test.net"))
+			assert.False(t, pool.ShouldSkipped("only.net"))
+		}
+	}
+}
+
+func TestPool_SkipReverse(t *testing.T) {
+	testSkipReverse(t, C.FilterBlackList)
+}
+
+func TestPool_SkipWhitelistReverse(t *testing.T) {
+	testSkipReverse(t, C.FilterWhiteList)
 }
 
 func TestPool_MaxCacheSize(t *testing.T) {

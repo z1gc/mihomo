@@ -220,6 +220,7 @@ type RawDNS struct {
 	FakeIPRange                  string                              `yaml:"fake-ip-range" json:"fake-ip-range"`
 	FakeIPFilter                 []string                            `yaml:"fake-ip-filter" json:"fake-ip-filter"`
 	FakeIPFilterMode             C.FilterMode                        `yaml:"fake-ip-filter-mode" json:"fake-ip-filter-mode"`
+	FakeIPReverse                []string                            `yaml:"fake-ip-reverse" json:"fake-ip-reverse"`
 	DefaultNameserver            []string                            `yaml:"default-nameserver" json:"default-nameserver"`
 	CacheAlgorithm               string                              `yaml:"cache-algorithm" json:"cache-algorithm"`
 	NameServerPolicy             *orderedmap.OrderedMap[string, any] `yaml:"nameserver-policy" json:"nameserver-policy"`
@@ -496,6 +497,7 @@ func DefaultRawConfig() *RawConfig {
 				"www.msftconnecttest.com",
 			},
 			FakeIPFilterMode: C.FilterBlackList,
+			FakeIPReverse:    []string{},
 		},
 		NTP: RawNTP{
 			Enable:        false,
@@ -564,13 +566,81 @@ func DefaultRawConfig() *RawConfig {
 	}
 }
 
+func tryAppend(node map[string]interface{}) {
+	// Due to limitation of yaml, we can't have duplicate keys, therefore all
+	//  nested keys must represent as "a.b.c+" format.
+	// And for this limitation, we only loop one level, no recursion.
+	for k, v := range node {
+		switch v.(type) {
+		/*
+			case map[string]interface{}:
+				tryAppend(v.(map[string]interface{}))
+				continue
+		*/
+		case []interface{}:
+			prefixes := strings.Split(k, ".")
+			key := prefixes[len(prefixes)-1]
+			prefixes = prefixes[:len(prefixes)-1]
+			isPrepend := false
+
+			// "a.b.+c" or "a.b.c+":
+			if strings.HasPrefix(key, "+") {
+				key = key[1:]
+				isPrepend = true
+			} else if strings.HasSuffix(key, "+") {
+				key = key[:len(key)-1]
+			} else {
+				continue
+			}
+
+			// Fetch the real value:
+			lastNode := node
+			for len(prefixes) != 0 {
+				lastNode = lastNode[prefixes[0]].(map[string]interface{})
+				prefixes = prefixes[1:]
+			}
+
+			// TODO: Optimize:
+			values := lastNode[key].([]interface{})
+			appendValues := v.([]interface{})
+			if isPrepend {
+				lastNode[key] = append(appendValues, values...)
+			} else {
+				lastNode[key] = append(values, appendValues...)
+			}
+		}
+	}
+}
+
 func UnmarshalRawConfig(buf []byte) (*RawConfig, error) {
+	node := new(map[string]interface{})
+	if err := yaml.Unmarshal(buf, node); err != nil {
+		return nil, err
+	}
+
+	// Find append:
+	tryAppend(*node)
+
+	// Re-marshal to verify the appended, and to reload the final config:
+	buf, err := yaml.Marshal(node)
+	if err != nil {
+		return nil, err
+	}
+
 	// config with default value
 	rawCfg := DefaultRawConfig()
 
 	if err := yaml.Unmarshal(buf, rawCfg); err != nil {
 		return nil, err
 	}
+
+	/*
+		// Re-dump the final configurations, for debugging only:
+		buf, err = yaml.Marshal(rawCfg)
+		if err == nil {
+			log.Infoln("\t===== YAML START =====\n%s\t===== YAML   END =====", buf)
+		}
+	*/
 
 	return rawCfg, nil
 }
@@ -1458,6 +1528,26 @@ func parseDNS(rawCfg *RawConfig, hosts *trie.DomainTrie[resolver.HostValue], rul
 		})
 		if err != nil {
 			return nil, err
+		}
+
+		/**
+		 * Reverse has higher priority, it filp the result.
+		 * e.g.
+		 *  fake-ip-filter:
+		 *   - +.cn
+		 *  fake-ip-filter-mode: blacklist
+		 *  fake-ip-reverse:
+		 *   - mistake.cn
+		 * Results `mistake.cn` get "whitelisted", i.e. it will be faked ip.
+		 * Works in the same manner of `whitelist` mode.
+		 */
+		if len(cfg.FakeIPReverse) != 0 {
+			reverse, err := parseDomain(cfg.FakeIPReverse, nil, "dns.fake-ip-reverse", ruleProviders)
+			if err != nil {
+				return nil, err
+			}
+
+			pool.Reverse = reverse
 		}
 
 		dnsCfg.FakeIPRange = pool

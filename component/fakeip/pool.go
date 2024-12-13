@@ -35,6 +35,7 @@ type Pool struct {
 	offset  netip.Addr
 	cycle   bool
 	mux     sync.Mutex
+	Reverse []C.DomainMatcher
 	host    []C.DomainMatcher
 	mode    C.FilterMode
 	ipnet   netip.Prefix
@@ -67,20 +68,25 @@ func (p *Pool) LookBack(ip netip.Addr) (string, bool) {
 
 // ShouldSkipped return if domain should be skipped
 func (p *Pool) ShouldSkipped(domain string) bool {
-	should := p.shouldSkipped(domain)
-	if p.mode == C.FilterWhiteList {
-		return !should
-	}
-	return should
-}
+	// In blacklist mode, we skip matched item, but in whitelist, we can't:
+	skipMatched := p.mode == C.FilterBlackList
 
-func (p *Pool) shouldSkipped(domain string) bool {
-	for _, matcher := range p.host {
+	// We have a higher priority matching, check it:
+	for _, matcher := range p.Reverse {
 		if matcher.MatchDomain(domain) {
-			return true
+			// Blacklist (expect true), Reversed to Whitelist, expecting false
+			// Whitelist (expect false), Reversed to Blacklist, expecting true
+			return !skipMatched
 		}
 	}
-	return false
+
+	for _, matcher := range p.host {
+		if matcher.MatchDomain(domain) {
+			return skipMatched
+		}
+	}
+
+	return !skipMatched /* aka. skipUnmatched */
 }
 
 // Exist returns if given ip exists in fake-ip pool
